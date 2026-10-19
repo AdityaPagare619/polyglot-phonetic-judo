@@ -490,15 +490,25 @@ export async function arbitrateWithZeroCostYoutubeSuggest(
     const timer = setTimeout(() => controller.abort(), 1200);
     const resp = await fetch(url, { signal: controller.signal });
     clearTimeout(timer);
-    const text = await resp.text();
-    const match = text.match(/\[\s*".*?"\s*,\s*(\[.*?\])\s*[,\vert{}\]]/);
-    if (match?.[1]) {
-      const parsed = JSON.parse(match[1]);
-      if (Array.isArray(parsed) && Array.isArray(parsed[0]) && typeof parsed[0][0] === "string") {
-        return parsed[0][0]
-          .replace(/\b(official|video|song|lyrics|hd|4k|audio|full)\b/gi, "")
-          .trim();
-      }
+    const text = (await resp.text()).trim();
+    // P1-4 (red-team): defensive JSONP parse — first '(' to last ')', then
+    // walk data[1] (the suggestion list). The old lazy-\[.*?\] regex captured
+    // up to the first ']' (unbalanced) so JSON.parse always threw and the
+    // function silently never arbitrated. Mirrors _parse_suggest_jsonp.
+    let inner = text;
+    if (inner.includes("(") && inner.endsWith(")")) {
+      inner = inner.slice(inner.indexOf("(") + 1, inner.lastIndexOf(")"));
+    }
+    const data = JSON.parse(inner);
+    const suggList = Array.isArray(data) ? data[1] : undefined;
+    if (Array.isArray(suggList) && Array.isArray(suggList[0]) &&
+        typeof suggList[0][0] === "string") {
+      // P1-4: strip trailing parenthetical qualifiers only — never mangle
+      // real title words ("Video Games" must survive; " (Official Video)" goes).
+      return suggList[0][0]
+        .replace(/\s*\((official|video|lyrics|hd|4k|audio|full[^)]*)\)\s*/gi, " ")
+        .replace(/\s{2,}/g, " ")
+        .trim();
     }
   } catch {
     // graceful offline deterministic fallback
